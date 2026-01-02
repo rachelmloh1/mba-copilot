@@ -231,30 +231,56 @@ export default function Home() {
         }
 
         console.log('Uploading file:', file.name, 'with path:', finalFilename, 'size:', file.size);
-        formData.append('filename', finalFilename);
 
-        // Choose upload endpoint based on file size
-        const uploadEndpoint = file.size > BLOB_UPLOAD_THRESHOLD
-          ? '/api/upload-blob'
-          : '/backend/upload';
+        let data: UploadResponse;
 
-        console.log(`Using ${uploadEndpoint} for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+        // Choose upload method based on file size
+        if (file.size > BLOB_UPLOAD_THRESHOLD) {
+          // Large files: Use client-side blob upload
+          console.log(`Using blob upload for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
-        const res = await fetch(uploadEndpoint, {
-          method: 'POST',
-          body: formData,
-        });
+          const { upload } = await import('@vercel/blob/client');
 
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || 'Upload failed');
+          await upload(finalFilename, file, {
+            access: 'public',
+            handleUploadUrl: '/api/upload-blob',
+          });
+
+          console.log('Blob uploaded, processing complete');
+
+          // The backend processing happens in the upload callback
+          // We just need to refresh documents
+          data = {
+            success: true,
+            document_id: `temp_${Date.now()}`, // Temporary ID, will refresh
+            filename: finalFilename,
+            chunks: 0,
+          };
+        } else {
+          // Small files: Direct upload
+          console.log(`Using direct upload for ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
+          formData.append('filename', finalFilename);
+
+          const res = await fetch('/backend/upload', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Upload failed');
+          }
+
+          data = await res.json();
         }
 
-        const data: UploadResponse = await res.json();
         successCount++;
 
         // Add the new document to selection
-        setSelectedDocIds((prev) => [...prev, data.document_id]);
+        if (data.document_id && !data.document_id.startsWith('temp_')) {
+          setSelectedDocIds((prev) => [...prev, data.document_id]);
+        }
       } catch (err) {
         console.error(`Failed to upload ${file.name}:`, err);
         failCount++;
